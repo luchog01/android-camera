@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """
-Lightweight Android Camera Streaming Server using FastAPI and Pillow
+Lightweight Android Camera Streaming Server using Flask and Pillow
 Designed to run on Termux for Android devices with minimal dependencies
 """
 
-import asyncio
 import logging
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse, HTMLResponse
-import uvicorn
+from flask import Flask, Response, jsonify
 import threading
 import time
 import subprocess
@@ -22,7 +19,7 @@ import math
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Android Camera Stream", description="Lightweight video streaming from Android camera via Termux")
+app = Flask(__name__)
 
 class LightweightCameraStreamer:
     def __init__(self):
@@ -178,20 +175,8 @@ def generate_frames() -> Generator[bytes, None, None]:
             logger.error(f"Frame generation error: {e}")
             time.sleep(0.2)
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize camera on startup"""
-    logger.info("Starting Lightweight Android Camera Stream Server...")
-    camera_streamer.start_streaming()
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info("Shutting down camera stream...")
-    camera_streamer.stop_streaming()
-
-@app.get("/", response_class=HTMLResponse)
-async def index():
+@app.route("/")
+def index():
     """Serve the main page with video stream"""
     html_content = """
     <!DOCTYPE html>
@@ -343,45 +328,50 @@ async def index():
     </body>
     </html>
     """
-    return HTMLResponse(content=html_content)
+    return html_content
 
-@app.get("/video_feed")
-async def video_feed():
+@app.route("/video_feed")
+def video_feed():
     """Video streaming endpoint"""
-    return StreamingResponse(
+    return Response(
         generate_frames(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        mimetype="multipart/x-mixed-replace; boundary=frame"
     )
 
-@app.get("/status")
-async def get_status():
+@app.route("/status")
+def get_status():
     """Get streaming status"""
-    return {
+    return jsonify({
         "status": "active" if camera_streamer.is_streaming else "inactive",
         "fps": camera_streamer.fps,
         "uptime": int(time.time() - camera_streamer.last_time),
         "termux_available": camera_streamer.is_termux_available(),
         "camera_type": "termux" if camera_streamer.is_termux_available() else "test_mode"
-    }
+    })
 
-@app.post("/restart")
-async def restart_stream():
+@app.route("/restart", methods=["POST"])
+def restart_stream():
     """Restart the camera stream"""
     camera_streamer.stop_streaming()
-    await asyncio.sleep(1)
+    time.sleep(1)
     success = camera_streamer.start_streaming()
-    return {"success": success, "message": "Stream restarted" if success else "Failed to restart stream"}
+    return jsonify({"success": success, "message": "Stream restarted" if success else "Failed to restart stream"})
 
 if __name__ == "__main__":
-    # Run the server
+    # Initialize camera on startup
     logger.info("Starting Lightweight Android Camera Stream Server on port 5000...")
     logger.info("Access the stream at: http://localhost:5000")
     logger.info("Or from your PC at: http://[PHONE_IP]:5000")
     
-    uvicorn.run(
-        app,
-        host="0.0.0.0",  # Allow connections from any IP
-        port=5000,
-        log_level="info",
-        access_log=False  # Reduce logging overhead
-    )
+    camera_streamer.start_streaming()
+    
+    try:
+        app.run(
+            host="0.0.0.0",  # Allow connections from any IP
+            port=5000,
+            debug=False,
+            threaded=True
+        )
+    except KeyboardInterrupt:
+        logger.info("Shutting down camera stream...")
+        camera_streamer.stop_streaming()
