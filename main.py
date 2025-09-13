@@ -204,22 +204,71 @@ def signal_handler(sig, frame):
 
 
 def check_termux_api():
-    """Check if termux-api is available"""
+    """Check if termux-api is available and test camera"""
+    print("Checking Termux API setup...")
+
+    # Test 1: Check if termux-camera-info exists
     try:
         result = subprocess.run(
-            ["termux-camera-info"], capture_output=True, text=True, timeout=5
+            ["which", "termux-camera-info"], capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            print(
+                "✗ termux-camera-info not found. Install with: pkg install termux-api"
+            )
+            return False
+        print("✓ termux-camera-info found")
+    except Exception as e:
+        print(f"✗ Error checking termux-camera-info: {e}")
+        return False
+
+    # Test 2: Check camera info
+    try:
+        result = subprocess.run(
+            ["termux-camera-info"], capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
             print("✓ Termux API camera access confirmed")
             print("Available cameras:")
             print(result.stdout)
-            return True
         else:
-            print("✗ Termux API camera access failed")
-            return False
+            print("✗ Camera info failed. Check Termux:API app permissions")
+            print(f"Error: {result.stderr}")
     except Exception as e:
-        print(f"✗ Error checking termux-api: {e}")
-        return False
+        print(f"✗ Error getting camera info: {e}")
+
+    # Test 3: Try taking a test photo
+    print("\nTesting camera capture...")
+    test_commands = [
+        ["termux-camera-photo", "-c", "0", "/dev/stdout"],
+        ["termux-camera-photo", "/dev/stdout"],
+        ["termux-camera-photo", "-c", "0", "-"],
+        ["termux-camera-photo", "-"],
+    ]
+
+    for i, cmd in enumerate(test_commands):
+        try:
+            print(f"Testing command {i + 1}: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, timeout=8)
+            if result.returncode == 0 and len(result.stdout) > 1000:
+                print(f"✓ Camera test {i + 1} successful! ({len(result.stdout)} bytes)")
+                return True
+            else:
+                print(
+                    f"✗ Camera test {i + 1} failed: {result.stderr.decode() if result.stderr else 'No output'}"
+                )
+        except subprocess.TimeoutExpired:
+            print(f"✗ Camera test {i + 1} timed out")
+        except Exception as e:
+            print(f"✗ Camera test {i + 1} error: {e}")
+
+    print("\n⚠️  All camera tests failed. Please check:")
+    print("1. Install Termux:API app from F-Droid or Google Play")
+    print("2. Grant camera permissions to Termux:API app")
+    print("3. Run: pkg install termux-api")
+    print("4. Restart Termux after installation")
+
+    return False
 
 
 def main():
