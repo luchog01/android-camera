@@ -50,7 +50,7 @@ class CameraStreamer:
                     temp_file,
                 ],
                 capture_output=True,
-                timeout=3,  # Reduced timeout for faster response
+                timeout=8,  # Increased timeout for camera reliability
             )
 
             if result.returncode == 0 and os.path.exists(temp_file):
@@ -132,7 +132,7 @@ class CameraStreamer:
             
             # Dynamic sleep to maintain consistent FPS
             frame_time = time.time() - frame_start_time
-            target_frame_time = 0.2  # 5 FPS
+            target_frame_time = 0.4  # 2.5 FPS for better reliability
             sleep_time = max(0, target_frame_time - frame_time)
             time.sleep(sleep_time)
     
