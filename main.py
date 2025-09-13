@@ -105,13 +105,12 @@ def capture_video():
         try:
             # Use termux-camera-photo with optimized settings
             # -c 0 = back camera, -s = size (smaller for efficiency)
+            temp_file = "/data/data/com.termux/files/home/temp_photo.jpg"
             cmd = [
                 "termux-camera-photo",
                 "-c",
                 "0",  # Back camera
-                "-s",
-                "640x480",  # Lower resolution for efficiency
-                "/dev/stdout",  # Output to stdout
+                temp_file,
             ]
 
             # Start camera process
