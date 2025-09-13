@@ -542,11 +542,9 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
-
 
 @app.route('/video_feed')
 def video_feed():
