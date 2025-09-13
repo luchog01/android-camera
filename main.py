@@ -80,8 +80,8 @@ class PurePythonGreenTracker:
                     # Zone divider lines
                     row.extend([100, 100, 100])  # Gray
                 else:
-                    # Background
-                    row.extend([40, 40, 60])  # Dark blue-gray
+                    # Background - make it brighter so it's visible
+                    row.extend([80, 80, 100])  # Lighter blue-gray
             
             image_data.extend(row)
         
@@ -160,9 +160,9 @@ class PurePythonGreenTracker:
         # Create a copy of the image
         overlay_data = image_data.copy()
         
-        # Add semi-transparent green overlay on detected green pixels
-        for y in range(0, self.frame_height, 2):  # Skip every other row for speed
-            for x in range(0, self.frame_width, 2):  # Skip every other column
+        # Add bright green overlay on detected green pixels
+        for y in range(self.frame_height):
+            for x in range(self.frame_width):
                 pixel_index = (y * self.frame_width + x) * 3
                 
                 if pixel_index + 2 < len(overlay_data):
@@ -171,10 +171,10 @@ class PurePythonGreenTracker:
                     b = overlay_data[pixel_index + 2]
                     
                     if self.is_green_pixel(r, g, b):
-                        # Add bright green overlay to detected pixels
-                        overlay_data[pixel_index] = min(255, r + 100)      # R
-                        overlay_data[pixel_index + 1] = 255                # G (full green)
-                        overlay_data[pixel_index + 2] = min(255, b + 100)  # B
+                        # Make detected green pixels much brighter and more saturated
+                        overlay_data[pixel_index] = 50       # R - some red for visibility
+                        overlay_data[pixel_index + 1] = 255  # G - full green
+                        overlay_data[pixel_index + 2] = 50   # B - some blue for visibility
         
         # Add annotations (red dot)
         overlay_data = self.draw_annotations(overlay_data)
