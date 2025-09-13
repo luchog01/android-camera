@@ -248,12 +248,12 @@ class PurePythonGreenTracker:
 app = Flask(__name__)
 tracker = PurePythonGreenTracker()
 
-# HTML template with inline CSS
+# HTML template with dual video feeds
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>🟢 Pure Python Green Tracker</title>
+    <title>🟢 Dual Feed Green Tracker</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -265,7 +265,7 @@ HTML_TEMPLATE = '''
             min-height: 100vh;
         }
         .container { 
-            max-width: 600px; 
+            max-width: 1000px; 
             margin: 0 auto; 
             text-align: center; 
         }
@@ -281,35 +281,68 @@ HTML_TEMPLATE = '''
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
-        .video-container { 
+        .feeds-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+        .feed-box { 
             background: rgba(255,255,255,0.05); 
             border-radius: 20px; 
-            padding: 25px; 
+            padding: 20px; 
             backdrop-filter: blur(20px);
             border: 1px solid rgba(255,255,255,0.1);
             box-shadow: 0 15px 35px rgba(0,0,0,0.4);
             animation: slideUp 1s ease-out;
         }
+        .feed-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            padding: 8px 16px;
+            border-radius: 15px;
+            display: inline-block;
+        }
+        .raw-title {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+        }
+        .mask-title {
+            background: linear-gradient(135deg, #f093fb, #f5576c);
+        }
+        .processed-title {
+            background: linear-gradient(135deg, #4facfe, #00f2fe);
+        }
         .video-frame { 
             max-width: 100%; 
             height: auto; 
             border-radius: 15px; 
-            border: 2px solid rgba(0,255,136,0.3);
+            border: 2px solid rgba(255,255,255,0.2);
             background: #222;
-            transition: border-color 0.3s ease;
+            transition: all 0.3s ease;
         }
         .video-frame:hover {
             border-color: rgba(0,255,136,0.6);
+            transform: scale(1.02);
+        }
+        .status-container {
+            background: rgba(255,255,255,0.05);
+            border-radius: 20px;
+            padding: 25px;
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 15px 35px rgba(0,0,0,0.4);
+            margin-bottom: 25px;
         }
         .status { 
-            margin: 20px 0; 
             padding: 15px; 
             border-radius: 15px; 
-            font-size: 20px; 
+            font-size: 24px; 
             font-weight: 600; 
             transition: all 0.4s ease;
             text-transform: uppercase;
             letter-spacing: 1px;
+            margin-bottom: 15px;
         }
         .LEFT { 
             background: linear-gradient(135deg, #ff6b6b, #ee5a5a); 
@@ -354,19 +387,27 @@ HTML_TEMPLATE = '''
             box-shadow: 0 5px 15px rgba(0,0,0,0.3);
         }
         .info { 
-            margin-top: 20px; 
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 20px;
             font-size: 14px; 
-            opacity: 0.8; 
+            opacity: 0.9; 
             line-height: 1.6;
+            text-align: left;
         }
-        .info p { margin: 5px 0; }
+        .info h3 { 
+            margin-bottom: 10px; 
+            color: #00ff88;
+            text-align: center;
+        }
+        .info p { margin: 8px 0; }
         .badge {
             display: inline-block;
             background: rgba(0,255,136,0.2);
             padding: 4px 12px;
             border-radius: 15px;
             font-size: 12px;
-            margin: 5px;
+            margin: 3px;
             border: 1px solid rgba(0,255,136,0.3);
         }
         
@@ -380,7 +421,10 @@ HTML_TEMPLATE = '''
             to { opacity: 1; transform: translateY(0); }
         }
         
-        @media (max-width: 480px) {
+        @media (max-width: 768px) {
+            .feeds-container {
+                grid-template-columns: 1fr;
+            }
             .controls { flex-direction: column; align-items: center; }
             .btn { width: 200px; }
         }
@@ -389,28 +433,52 @@ HTML_TEMPLATE = '''
 <body>
     <div class="container">
         <div class="header">
-            <h1>🟢 Pure Python Tracker</h1>
-            <p>Zero external image dependencies!</p>
-            <div class="badge">Standard Library Only</div>
-            <div class="badge">Flask + Python Built-ins</div>
+            <h1>🟢 Dual Feed Green Tracker</h1>
+            <p>Raw video + Green detection mask</p>
+            <div class="badge">Pure Python</div>
+            <div class="badge">Dual Streams</div>
+            <div class="badge">Real-time Mask</div>
         </div>
         
-        <div class="video-container">
-            <img id="videoStream" class="video-frame" src="{{ url_for('video_feed') }}" alt="Loading video stream...">
+        <div class="feeds-container">
+            <div class="feed-box">
+                <div class="feed-title raw-title">📹 Raw Video Feed</div>
+                <img class="video-frame" src="{{ url_for('raw_video_feed') }}" alt="Raw video stream">
+                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">Original camera input</p>
+            </div>
+            
+            <div class="feed-box">
+                <div class="feed-title mask-title">🎭 Green Detection Mask</div>
+                <img class="video-frame" src="{{ url_for('mask_video_feed') }}" alt="Green mask stream">
+                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">White = detected green pixels</p>
+            </div>
+            
+            <div class="feed-box">
+                <div class="feed-title processed-title">🎯 Processed Feed</div>
+                <img class="video-frame" src="{{ url_for('processed_video_feed') }}" alt="Processed video stream">
+                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">With tracking annotations</p>
+            </div>
+        </div>
+        
+        <div class="status-container">
             <div id="statusDisplay" class="status">🔄 Initializing...</div>
-        </div>
-        
-        <div class="controls">
-            <button class="btn" onclick="adjustSensitivity('increase')">🔍 More Sensitive</button>
-            <button class="btn" onclick="adjustSensitivity('decrease')">🎯 Less Sensitive</button>
-            <button class="btn" onclick="location.reload()">🔄 Refresh</button>
+            
+            <div class="controls">
+                <button class="btn" onclick="adjustSensitivity('increase')">🔍 More Sensitive</button>
+                <button class="btn" onclick="adjustSensitivity('decrease')">🎯 Less Sensitive</button>
+                <button class="btn" onclick="location.reload()">🔄 Refresh All</button>
+            </div>
         </div>
         
         <div class="info">
-            <p>🔴 <strong>Red dot</strong> marks the center of detected green objects</p>
-            <p>📱 Point camera at green objects (balls, toys, plants)</p>
-            <p>⚡ Optimized for mobile devices - pure Python processing</p>
-            <p>🎨 Adjust sensitivity if detection isn't working well</p>
+            <h3>📺 Feed Explanations</h3>
+            <p><strong>📹 Raw Feed:</strong> Direct camera input with no processing</p>
+            <p><strong>🎭 Mask Feed:</strong> Binary mask showing detected green pixels in white</p>
+            <p><strong>🎯 Processed Feed:</strong> Original video with red tracking dot and zone lines</p>
+            <br>
+            <p><strong>🔴 Red dot:</strong> Center of detected green object</p>
+            <p><strong>📱 Usage:</strong> Point camera at green objects (balls, toys, plants)</p>
+            <p><strong>⚡ Performance:</strong> Pure Python - no external image dependencies!</p>
         </div>
     </div>
 
@@ -446,7 +514,6 @@ HTML_TEMPLATE = '''
                 .then(response => response.json())
                 .then(data => {
                     console.log('Sensitivity adjusted:', data);
-                    // Visual feedback
                     const btn = event.target;
                     const original = btn.textContent;
                     btn.textContent = '✅ Adjusted!';
@@ -455,27 +522,31 @@ HTML_TEMPLATE = '''
                 .catch(error => console.error('Adjustment failed:', error));
         }
         
-        // Update every 300ms (slower for stability)
+        // Update status every 300ms
         setInterval(updateStatus, 300);
         
-        // Handle image errors gracefully
-        document.getElementById('videoStream').onerror = function() {
-            this.alt = '⚠️ Stream temporarily unavailable';
-            setTimeout(() => {
-                this.src = '{{ url_for("video_feed") }}?' + Date.now();
-            }, 3000);
-        };
+        // Handle image loading errors for all feeds
+        document.querySelectorAll('.video-frame').forEach(img => {
+            img.onerror = function() {
+                this.alt = '⚠️ Stream loading...';
+                setTimeout(() => {
+                    this.src = this.src.split('?')[0] + '?' + Date.now();
+                }, 3000);
+            };
+        });
         
-        // Initial status check
+        // Initial status update
         updateStatus();
     </script>
 </body>
 </html>
 '''
 
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
+
 
 @app.route('/video_feed')
 def video_feed():
@@ -511,12 +582,15 @@ def adjust_sensitivity(action):
     return {'status': 'adjusted', 'action': action, 'thresholds': tracker.green_threshold}
 
 def main():
-    print("🐍 Pure Python Green Tracker")
-    print("=" * 40)
+    print("🎬 Dual Feed Green Tracker")
+    print("=" * 50)
     print("📦 Dependencies: Flask only!")
     print("🎯 Image processing: Pure Python")
-    print("💾 Memory usage: Minimal")
-    print("=" * 40)
+    print("📺 Three video feeds:")
+    print("   📹 Raw - Original camera input")
+    print("   🎭 Mask - Green detection visualization")  
+    print("   🎯 Processed - With tracking annotations")
+    print("=" * 50)
     
     if not tracker.start():
         print("❌ Failed to start tracker")
@@ -526,6 +600,7 @@ def main():
     print("🌐 Web server starting...")
     print("📱 Access from PC: http://YOUR_PHONE_IP:5000")
     print("🎮 Test mode: Moving green circle demo")
+    print("📺 View all three feeds simultaneously!")
     print("⏹️  Press Ctrl+C to stop")
     
     try:
@@ -534,7 +609,7 @@ def main():
         print("\n🛑 Shutting down gracefully...")
     finally:
         tracker.stop()
-        print("✅ Bye! 👋")
+        print("✅ All feeds stopped! 👋")
 
 if __name__ == '__main__':
     main()
