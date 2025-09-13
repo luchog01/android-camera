@@ -46,25 +46,39 @@ class LightweightCameraStreamer:
     def is_termux_available(self) -> bool:
         """Check if Termux API is available"""
         try:
-            result = subprocess.run(['which', 'termux-camera-photo'], 
+            # First check if termux-camera-photo command exists
+            result = subprocess.run(['termux-camera-photo', '--help'], 
                                   capture_output=True, text=True, timeout=5)
+            logger.info(f"Termux camera check result: {result.returncode}")
+            if result.stderr:
+                logger.info(f"Termux camera stderr: {result.stderr}")
             return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            logger.info(f"Termux camera not available: {e}")
             return False
     
     def capture_termux_frame(self) -> bytes:
         """Capture frame using Termux camera API"""
         try:
             # Use termux-camera-photo to capture image
+            logger.info("Attempting to capture frame with termux-camera-photo")
             result = subprocess.run([
                 'termux-camera-photo', 
-                '-c', '0',  # Use back camera
+                '-c', '0',  # Use back camera (try camera 0)
                 self.temp_file
-            ], capture_output=True, timeout=3)
+            ], capture_output=True, timeout=10, text=True)
+            
+            logger.info(f"Camera capture result: return code {result.returncode}")
+            if result.stdout:
+                logger.info(f"Camera stdout: {result.stdout}")
+            if result.stderr:
+                logger.info(f"Camera stderr: {result.stderr}")
             
             if result.returncode == 0 and os.path.exists(self.temp_file):
+                logger.info(f"Camera file captured successfully: {self.temp_file}")
                 with open(self.temp_file, 'rb') as f:
                     frame_data = f.read()
+                logger.info(f"Frame data size: {len(frame_data)} bytes")
                 # Clean up temp file
                 try:
                     os.remove(self.temp_file)
@@ -72,7 +86,27 @@ class LightweightCameraStreamer:
                     pass
                 return frame_data
             else:
-                logger.error(f"Termux camera error: {result.stderr}")
+                logger.error(f"Termux camera failed - return code: {result.returncode}")
+                logger.error(f"File exists: {os.path.exists(self.temp_file)}")
+                # Try alternative camera IDs
+                for camera_id in ['1', '2']:
+                    logger.info(f"Trying camera ID {camera_id}")
+                    alt_result = subprocess.run([
+                        'termux-camera-photo', 
+                        '-c', camera_id,
+                        self.temp_file
+                    ], capture_output=True, timeout=10, text=True)
+                    
+                    if alt_result.returncode == 0 and os.path.exists(self.temp_file):
+                        logger.info(f"Success with camera ID {camera_id}")
+                        with open(self.temp_file, 'rb') as f:
+                            frame_data = f.read()
+                        try:
+                            os.remove(self.temp_file)
+                        except (OSError, FileNotFoundError):
+                            pass
+                        return frame_data
+                
                 return None
         except Exception as e:
             logger.error(f"Termux capture failed: {e}")
@@ -106,8 +140,12 @@ class LightweightCameraStreamer:
     def create_bmp_image(self, width: int, height: int) -> bytes:
         """Create a BMP image using pure Python"""
         try:
+            # Calculate row padding (BMP rows must be multiple of 4 bytes)
+            row_size = ((width * 3 + 3) // 4) * 4
+            pixel_data_size = row_size * height
+            file_size = 54 + pixel_data_size
+            
             # BMP header
-            file_size = 54 + (width * height * 3)  # Header + pixel data
             bmp_header = struct.pack('<2sIHHI', b'BM', file_size, 0, 0, 54)
             
             # DIB header
@@ -117,35 +155,49 @@ class LightweightCameraStreamer:
                 1,  # Color planes
                 24,  # Bits per pixel
                 0,  # Compression
-                width * height * 3,  # Image size
+                pixel_data_size,  # Image size
                 2835, 2835,  # Pixels per meter
                 0, 0  # Colors used/important
             )
             
             # Create animated pattern
             t = time.time()
-            center_x = int((math.sin(t) + 1) * width / 2)
-            center_y = int((math.cos(t) + 1) * height / 2)
+            center_x = int((math.sin(t * 0.5) + 1) * width / 2)
+            center_y = int((math.cos(t * 0.5) + 1) * height / 2)
             
             # Generate pixel data (BGR format for BMP)
             pixels = bytearray()
             for y in range(height - 1, -1, -1):  # BMP is bottom-up
+                row_data = bytearray()
                 for x in range(width):
                     # Calculate distance from center for circle effect
                     dx = x - center_x
                     dy = y - center_y
                     distance = math.sqrt(dx*dx + dy*dy)
                     
-                    # Create animated pattern
-                    if distance < 30:  # Moving circle
-                        # Green circle
-                        pixels.extend([0, 255, 0])  # BGR
-                    elif (x + int(t*10)) % 40 < 20 and (y + int(t*10)) % 40 < 20:
-                        # Animated grid pattern
-                        pixels.extend([100, 100, 200])  # Light blue
+                    # Create smooth animated pattern
+                    if distance < 25:  # Moving circle
+                        # Bright green circle
+                        row_data.extend([0, 255, 0])  # BGR: Green
+                    elif distance < 35:  # Circle border
+                        # Yellow border
+                        row_data.extend([0, 255, 255])  # BGR: Yellow
                     else:
-                        # Background
-                        pixels.extend([50, 50, 100])  # Dark blue
+                        # Create gradient background with animated waves
+                        wave1 = int(50 + 30 * math.sin((x + t * 20) * 0.1))
+                        wave2 = int(50 + 30 * math.cos((y + t * 15) * 0.1))
+                        
+                        # Blue gradient background
+                        blue = min(255, max(0, 100 + wave1))
+                        green = min(255, max(0, 50 + wave2))
+                        red = min(255, max(0, 30 + int(10 * math.sin(t))))
+                        
+                        row_data.extend([blue, green, red])  # BGR
+                
+                # Add padding to make row size multiple of 4
+                padding = row_size - (width * 3)
+                row_data.extend([0] * padding)
+                pixels.extend(row_data)
             
             self.frame_count += 1
             return bmp_header + dib_header + pixels
