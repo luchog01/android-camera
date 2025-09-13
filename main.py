@@ -152,6 +152,35 @@ class PurePythonGreenTracker:
         
         return image_data
     
+    def create_green_mask_overlay(self, image_data):
+        """Create image with green mask overlay and annotations"""
+        if not image_data:
+            return image_data
+        
+        # Create a copy of the image
+        overlay_data = image_data.copy()
+        
+        # Add semi-transparent green overlay on detected green pixels
+        for y in range(0, self.frame_height, 2):  # Skip every other row for speed
+            for x in range(0, self.frame_width, 2):  # Skip every other column
+                pixel_index = (y * self.frame_width + x) * 3
+                
+                if pixel_index + 2 < len(overlay_data):
+                    r = overlay_data[pixel_index]
+                    g = overlay_data[pixel_index + 1] 
+                    b = overlay_data[pixel_index + 2]
+                    
+                    if self.is_green_pixel(r, g, b):
+                        # Add bright green overlay to detected pixels
+                        overlay_data[pixel_index] = min(255, r + 100)      # R
+                        overlay_data[pixel_index + 1] = 255                # G (full green)
+                        overlay_data[pixel_index + 2] = min(255, b + 100)  # B
+        
+        # Add annotations (red dot)
+        overlay_data = self.draw_annotations(overlay_data)
+        
+        return overlay_data
+    
     def rgb_to_jpeg_bytes(self, image_data):
         """Convert RGB data to simple bitmap format (BMP) since we can't easily make JPEG"""
         if not image_data:
@@ -442,21 +471,15 @@ HTML_TEMPLATE = '''
         
         <div class="feeds-container">
             <div class="feed-box">
-                <div class="feed-title raw-title">📹 Raw Video Feed</div>
-                <img class="video-frame" src="{{ url_for('video_feed') }}" alt="Raw video stream">
-                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">Original camera input</p>
+                <div class="feed-title raw-title">📹 Camera Feed</div>
+                <img class="video-frame" src="{{ url_for('raw_video_feed') }}" alt="Raw video stream">
+                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">Live camera view</p>
             </div>
             
             <div class="feed-box">
-                <div class="feed-title mask-title">🎭 Green Detection Mask</div>
-                <img class="video-frame" src="{{ url_for('video_feed') }}" alt="Green mask stream">
-                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">White = detected green pixels</p>
-            </div>
-            
-            <div class="feed-box">
-                <div class="feed-title processed-title">🎯 Processed Feed</div>
-                <img class="video-frame" src="{{ url_for('video_feed') }}" alt="Processed video stream">
-                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">With tracking annotations</p>
+                <div class="feed-title processed-title">🎯 Green Detection</div>
+                <img class="video-frame" src="{{ url_for('processed_video_feed') }}" alt="Processed video stream">
+                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">With green mask overlay</p>
             </div>
         </div>
         
@@ -472,9 +495,8 @@ HTML_TEMPLATE = '''
         
         <div class="info">
             <h3>📺 Feed Explanations</h3>
-            <p><strong>📹 Raw Feed:</strong> Direct camera input with no processing</p>
-            <p><strong>🎭 Mask Feed:</strong> Binary mask showing detected green pixels in white</p>
-            <p><strong>🎯 Processed Feed:</strong> Original video with red tracking dot and zone lines</p>
+            <p><strong>📹 Camera Feed:</strong> Direct camera input as you would normally see it</p>
+            <p><strong>🎯 Green Detection:</strong> Camera view with green mask overlay and tracking annotations</p>
             <br>
             <p><strong>🔴 Red dot:</strong> Center of detected green object</p>
             <p><strong>📱 Usage:</strong> Point camera at green objects (balls, toys, plants)</p>
@@ -546,11 +568,39 @@ HTML_TEMPLATE = '''
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/video_feed')
-def video_feed():
+@app.route('/raw_video_feed')
+def raw_video_feed():
     def generate():
         while True:
-            frame_bytes = tracker.get_frame_bytes()
+            # Get raw frame without annotations
+            image_data = tracker.capture_with_termux()
+            if not image_data:
+                image_data = tracker.create_test_image()
+            
+            frame_bytes = tracker.rgb_to_jpeg_bytes(image_data)
+            if frame_bytes:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/bmp\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.1)
+    
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/processed_video_feed')
+def processed_video_feed():
+    def generate():
+        while True:
+            # Get raw frame and create overlay with green mask
+            image_data = tracker.capture_with_termux()
+            if not image_data:
+                image_data = tracker.create_test_image()
+            
+            # Detect green objects first
+            tracker.detect_green_center(image_data)
+            
+            # Create overlay with green mask and annotations
+            overlay_data = tracker.create_green_mask_overlay(image_data)
+            frame_bytes = tracker.rgb_to_jpeg_bytes(overlay_data)
+            
             if frame_bytes:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/bmp\r\n\r\n' + frame_bytes + b'\r\n')
