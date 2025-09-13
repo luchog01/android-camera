@@ -152,31 +152,15 @@ class PurePythonGreenTracker:
         
         return image_data
     
-    def create_green_mask_overlay(self, image_data):
-        """Create image with green mask overlay and annotations"""
+    def add_red_dot_only(self, image_data):
+        """Add only red dot overlay - no green mask"""
         if not image_data:
             return image_data
         
         # Create a copy of the image
         overlay_data = image_data.copy()
         
-        # Add bright green overlay on detected green pixels
-        for y in range(self.frame_height):
-            for x in range(self.frame_width):
-                pixel_index = (y * self.frame_width + x) * 3
-                
-                if pixel_index + 2 < len(overlay_data):
-                    r = overlay_data[pixel_index]
-                    g = overlay_data[pixel_index + 1] 
-                    b = overlay_data[pixel_index + 2]
-                    
-                    if self.is_green_pixel(r, g, b):
-                        # Make detected green pixels much brighter and more saturated
-                        overlay_data[pixel_index] = 50       # R - some red for visibility
-                        overlay_data[pixel_index + 1] = 255  # G - full green
-                        overlay_data[pixel_index + 2] = 50   # B - some blue for visibility
-        
-        # Add annotations (red dot)
+        # Add only the red dot annotation
         overlay_data = self.draw_annotations(overlay_data)
         
         return overlay_data
@@ -477,9 +461,9 @@ HTML_TEMPLATE = '''
             </div>
             
             <div class="feed-box">
-                <div class="feed-title processed-title">🎯 Green Detection</div>
+                <div class="feed-title processed-title">🎯 With Red Dot</div>
                 <img class="video-frame" src="{{ url_for('processed_video_feed') }}" alt="Processed video stream">
-                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">With green mask overlay</p>
+                <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">Red dot shows green center</p>
             </div>
         </div>
         
@@ -495,10 +479,10 @@ HTML_TEMPLATE = '''
         
         <div class="info">
             <h3>📺 Feed Explanations</h3>
-            <p><strong>📹 Camera Feed:</strong> Direct camera input as you would normally see it</p>
-            <p><strong>🎯 Green Detection:</strong> Camera view with green mask overlay and tracking annotations</p>
+            <p><strong>📹 Camera Feed:</strong> Clean camera view as you would normally see it</p>
+            <p><strong>🎯 With Red Dot:</strong> Same camera view with red dot marking green object center</p>
             <br>
-            <p><strong>🔴 Red dot:</strong> Center of detected green object</p>
+            <p><strong>🔴 Red dot:</strong> Average position of all detected green pixels</p>
             <p><strong>📱 Usage:</strong> Point camera at green objects (balls, toys, plants)</p>
             <p><strong>⚡ Performance:</strong> Pure Python - no external image dependencies!</p>
         </div>
@@ -589,7 +573,7 @@ def raw_video_feed():
 def processed_video_feed():
     def generate():
         while True:
-            # Get raw frame and create overlay with green mask
+            # Get raw frame
             image_data = tracker.capture_with_termux()
             if not image_data:
                 image_data = tracker.create_test_image()
@@ -597,8 +581,8 @@ def processed_video_feed():
             # Detect green objects first
             tracker.detect_green_center(image_data)
             
-            # Create overlay with green mask and annotations
-            overlay_data = tracker.create_green_mask_overlay(image_data)
+            # Add only red dot overlay
+            overlay_data = tracker.add_red_dot_only(image_data)
             frame_bytes = tracker.rgb_to_jpeg_bytes(overlay_data)
             
             if frame_bytes:
