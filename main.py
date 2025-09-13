@@ -13,6 +13,8 @@ import queue
 import signal
 import sys
 import os
+import platform
+import shutil
 
 app = Flask(__name__)
 
@@ -207,12 +209,22 @@ def check_termux_api():
     """Check if termux-api is available and test camera"""
     print("Checking Termux API setup...")
 
-    # Test 1: Check if termux-camera-info exists
+    # Check if we're on Android/Termux or another platform
+    current_platform = platform.system().lower()
+    if current_platform == "windows":
+        print("✗ This application is designed for Android/Termux environment")
+        print("✗ Windows platform detected - Termux commands not available")
+        print("ℹ️  To use this app:")
+        print("   1. Install Termux on Android device")
+        print("   2. Install termux-api: pkg install termux-api")
+        print("   3. Install Termux:API app from F-Droid or Google Play")
+        print("   4. Run this script on Android/Termux")
+        return False
+
+    # Test 1: Check if termux-camera-info exists using shutil.which (cross-platform)
     try:
-        result = subprocess.run(
-            ["which", "termux-camera-info"], capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
+        termux_camera_path = shutil.which("termux-camera-info")
+        if not termux_camera_path:
             print(
                 "✗ termux-camera-info not found. Install with: pkg install termux-api"
             )
