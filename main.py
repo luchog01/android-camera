@@ -443,19 +443,19 @@ HTML_TEMPLATE = '''
         <div class="feeds-container">
             <div class="feed-box">
                 <div class="feed-title raw-title">📹 Raw Video Feed</div>
-                <img class="video-frame" src="{{ url_for('raw_video_feed') }}" alt="Raw video stream">
+                <img class="video-frame" src="{{ url_for('video_feed') }}" alt="Raw video stream">
                 <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">Original camera input</p>
             </div>
             
             <div class="feed-box">
                 <div class="feed-title mask-title">🎭 Green Detection Mask</div>
-                <img class="video-frame" src="{{ url_for('mask_video_feed') }}" alt="Green mask stream">
+                <img class="video-frame" src="{{ url_for('video_feed') }}" alt="Green mask stream">
                 <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">White = detected green pixels</p>
             </div>
             
             <div class="feed-box">
                 <div class="feed-title processed-title">🎯 Processed Feed</div>
-                <img class="video-frame" src="{{ url_for('processed_video_feed') }}" alt="Processed video stream">
+                <img class="video-frame" src="{{ url_for('video_feed') }}" alt="Processed video stream">
                 <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">With tracking annotations</p>
             </div>
         </div>
