@@ -1,345 +1,387 @@
-import io
-import time
-import threading
-import struct
-import subprocess
-import os
-import base64
-from flask import Flask, Response, render_template_string
+#!/usr/bin/env python3
+"""
+Lightweight Android Camera Streaming Server using FastAPI and Pillow
+Designed to run on Termux for Android devices with minimal dependencies
+"""
 
-class PurePythonGreenTracker:
+import asyncio
+import logging
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse, HTMLResponse
+import uvicorn
+import threading
+import time
+import subprocess
+from typing import Generator
+from PIL import Image, ImageDraw
+import io
+import os
+import math
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Android Camera Stream", description="Lightweight video streaming from Android camera via Termux")
+
+class LightweightCameraStreamer:
     def __init__(self):
-        self.current_frame_data = None
-        self.frame_width = 320  # Smaller for better performance
-        self.frame_height = 240
-        self.green_center = None
-        self.side_position = "CENTER"
-        self.running = False
+        self.is_streaming = False
+        self.lock = threading.Lock()
+        self.fps = 10  # Lower FPS for better performance
+        self.frame_count = 0
+        self.last_time = time.time()
+        self.temp_file = "/tmp/camera_frame.jpg"
         
-        # Green color thresholds (RGB values)
-        self.green_threshold = {
-            'r_min': 0, 'r_max': 100,    # Low red
-            'g_min': 60, 'g_max': 255,   # High green
-            'b_min': 0, 'b_max': 100     # Low blue
-        }
-    
-    def is_green_pixel(self, r, g, b):
-        """Check if a pixel is green based on RGB thresholds"""
-        return (self.green_threshold['r_min'] <= r <= self.green_threshold['r_max'] and
-                self.green_threshold['g_min'] <= g <= self.green_threshold['g_max'] and
-                self.green_threshold['b_min'] <= b <= self.green_threshold['b_max'])
-    
-    def capture_with_termux(self):
-        """Capture image using termux-camera-photo"""
+    def initialize_camera(self) -> bool:
+        """Initialize camera - primarily uses Termux"""
         try:
-            # Capture to temporary file
+            if self.is_termux_available():
+                logger.info("Termux detected, using termux-camera-photo")
+                return True
+            else:
+                logger.info("Termux not available, using test mode")
+                return True  # Always return True, fallback to test frames
+                
+        except Exception as e:
+            logger.error(f"Camera initialization failed: {e}")
+            return True  # Still allow test mode
+    
+    def is_termux_available(self) -> bool:
+        """Check if Termux API is available"""
+        try:
+            result = subprocess.run(['which', 'termux-camera-photo'], 
+                                  capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return False
+    
+    def capture_termux_frame(self) -> bytes:
+        """Capture frame using Termux camera API"""
+        try:
+            # Use termux-camera-photo to capture image
             result = subprocess.run([
                 'termux-camera-photo', 
                 '-c', '0',  # Use back camera
-                '/tmp/cam_capture.jpg'
-            ], capture_output=True, text=True, timeout=5)
+                self.temp_file
+            ], capture_output=True, timeout=3)
             
-            if result.returncode == 0 and os.path.exists('/tmp/cam_capture.jpg'):
-                # Read the raw JPEG file
-                with open('/tmp/cam_capture.jpg', 'rb') as f:
-                    jpeg_data = f.read()
-                return self.decode_jpeg_simple(jpeg_data)
-            return None
+            if result.returncode == 0 and os.path.exists(self.temp_file):
+                with open(self.temp_file, 'rb') as f:
+                    frame_data = f.read()
+                # Clean up temp file
+                try:
+                    os.remove(self.temp_file)
+                except (OSError, FileNotFoundError):
+                    pass
+                return frame_data
+            else:
+                logger.error(f"Termux camera error: {result.stderr}")
+                return None
         except Exception as e:
-            print(f"Termux capture error: {e}")
+            logger.error(f"Termux capture failed: {e}")
             return None
     
-    def decode_jpeg_simple(self, jpeg_data):
-        """Simple JPEG decode - fallback to test image if decode fails"""
-        # For now, return test image since pure Python JPEG decode is complex
-        # In a real scenario, you might use system tools to convert JPEG to raw format
-        return self.create_test_image()
-    
-    def create_test_image(self):
-        """Create a test image with moving green circle using only standard library"""
-        # Create RGB array: width * height * 3 (RGB)
-        image_data = []
-        
-        import math
-        t = time.time()
-        # Moving green circle parameters
-        center_x = int(self.frame_width/2 + 80 * math.sin(t * 0.8))
-        center_y = int(self.frame_height/2 + 60 * math.cos(t * 0.6))
-        radius = 25
-        
-        for y in range(self.frame_height):
-            row = []
-            for x in range(self.frame_width):
-                # Distance from circle center
-                dist = ((x - center_x) ** 2 + (y - center_y) ** 2) ** 0.5
-                
-                if dist <= radius:
-                    # Green circle
-                    row.extend([0, 180, 0])  # RGB: Green
-                elif x == self.frame_width // 3 or x == 2 * self.frame_width // 3:
-                    # Zone divider lines
-                    row.extend([100, 100, 100])  # Gray
-                else:
-                    # Background - make it brighter so it's visible
-                    row.extend([80, 80, 100])  # Lighter blue-gray
+    def get_frame(self) -> bytes:
+        """Get current frame as JPEG bytes"""
+        with self.lock:
+            if self.is_termux_available():
+                frame_data = self.capture_termux_frame()
+                if frame_data:
+                    return frame_data
             
-            image_data.extend(row)
-        
-        return image_data
+            # Fallback to test frame
+            return self.generate_test_frame()
     
-    def detect_green_center(self, image_data):
-        """Detect green pixels and calculate center - pure Python"""
-        if not image_data:
-            return False
-        
-        green_pixels = []
-        
-        # Process pixels (RGB format: [R,G,B,R,G,B,...])
-        for y in range(0, self.frame_height, 2):  # Skip every other row for speed
-            for x in range(0, self.frame_width, 2):  # Skip every other column
-                pixel_index = (y * self.frame_width + x) * 3
-                
-                if pixel_index + 2 < len(image_data):
-                    r = image_data[pixel_index]
-                    g = image_data[pixel_index + 1] 
-                    b = image_data[pixel_index + 2]
-                    
-                    if self.is_green_pixel(r, g, b):
-                        green_pixels.append((x, y))
-        
-        if green_pixels:
-            # Calculate center of mass
-            avg_x = sum(p[0] for p in green_pixels) / len(green_pixels)
-            avg_y = sum(p[1] for p in green_pixels) / len(green_pixels)
-            
-            self.green_center = (int(avg_x), int(avg_y))
-            
-            # Determine position
-            if avg_x < self.frame_width // 3:
-                self.side_position = "LEFT"
-            elif avg_x > 2 * self.frame_width // 3:
-                self.side_position = "RIGHT"
-            else:
-                self.side_position = "CENTER"
-            
-            return True
-        else:
-            self.green_center = None
-            self.side_position = "NOT DETECTED"
-            return False
-    
-    def draw_annotations(self, image_data):
-        """Draw annotations directly on RGB array"""
-        if not image_data:
-            return image_data
-        
-        # Draw center dot
-        if self.green_center:
-            cx, cy = self.green_center
-            dot_size = 4
-            
-            for dy in range(-dot_size, dot_size + 1):
-                for dx in range(-dot_size, dot_size + 1):
-                    x, y = cx + dx, cy + dy
-                    if 0 <= x < self.frame_width and 0 <= y < self.frame_height:
-                        if dx*dx + dy*dy <= dot_size*dot_size:
-                            pixel_index = (y * self.frame_width + x) * 3
-                            if pixel_index + 2 < len(image_data):
-                                # Red dot
-                                image_data[pixel_index] = 255     # R
-                                image_data[pixel_index + 1] = 0   # G  
-                                image_data[pixel_index + 2] = 0   # B
-        
-        return image_data
-    
-    def add_red_dot_only(self, image_data):
-        """Add only red dot overlay - no green mask"""
-        if not image_data:
-            return image_data
-        
-        # Create a copy of the image
-        overlay_data = image_data.copy()
-        
-        # Add only the red dot annotation
-        overlay_data = self.draw_annotations(overlay_data)
-        
-        return overlay_data
-    
-    def rgb_to_jpeg_bytes(self, image_data):
-        """Convert RGB data to simple bitmap format (BMP) since we can't easily make JPEG"""
-        if not image_data:
-            return None
-        
-        # Create a simple BMP file in memory
-        # BMP Header (54 bytes) + pixel data
-        width, height = self.frame_width, self.frame_height
-        
-        # BMP file header (14 bytes)
-        file_size = 54 + width * height * 3
-        bmp_header = struct.pack('<2sIHHI', b'BM', file_size, 0, 0, 54)
-        
-        # BMP info header (40 bytes)  
-        info_header = struct.pack('<IiiHHIIiiII', 40, width, -height, 1, 24, 0, 
-                                 width * height * 3, 0, 0, 0, 0)
-        
-        # Convert RGB to BGR for BMP format and add padding
-        bmp_data = bytearray()
-        row_padding = (4 - (width * 3) % 4) % 4
-        
-        for y in range(height):
-            for x in range(width):
-                pixel_index = (y * width + x) * 3
-                if pixel_index + 2 < len(image_data):
-                    r = image_data[pixel_index]
-                    g = image_data[pixel_index + 1]
-                    b = image_data[pixel_index + 2]
-                    bmp_data.extend([b, g, r])  # BMP uses BGR
-                else:
-                    bmp_data.extend([0, 0, 0])
-            
-            # Add row padding
-            bmp_data.extend([0] * row_padding)
-        
-        return bmp_header + info_header + bmp_data
-    
-    def capture_and_process(self):
-        """Main processing loop"""
-        while self.running:
-            try:
-                # Try to capture real image, fallback to test
-                image_data = self.capture_with_termux()
-                if not image_data:
-                    image_data = self.create_test_image()
-                
-                # Detect green objects
-                self.detect_green_center(image_data)
-                
-                # Draw annotations
-                image_data = self.draw_annotations(image_data)
-                
-                # Store frame
-                self.current_frame_data = image_data
-                
-            except Exception as e:
-                print(f"Processing error: {e}")
-                self.current_frame_data = self.create_test_image()
-            
-            time.sleep(0.15)  # ~6-7 FPS for stability
-    
-    def get_frame_bytes(self):
-        """Get current frame as image bytes"""
-        if self.current_frame_data:
-            return self.rgb_to_jpeg_bytes(self.current_frame_data)
-        return None
-    
-    def start(self):
-        """Start the tracker"""
-        print("🟢 Starting Pure Python Green Tracker...")
-        
-        # Test termux-api availability
+    def generate_test_frame(self) -> bytes:
+        """Generate a test frame using Pillow"""
         try:
-            result = subprocess.run(['termux-camera-info'], 
-                                  capture_output=True, timeout=2)
-            if result.returncode == 0:
-                print("📱 Termux camera API available")
-            else:
-                print("⚠️  Termux camera API not available, using test mode")
-        except:
-            print("⚠️  Termux not detected, using test mode")
+            # Create a simple test pattern
+            width, height = 640, 480
+            image = Image.new('RGB', (width, height), color='navy')
+            draw = ImageDraw.Draw(image)
+            
+            # Add some moving elements
+            t = time.time()
+            x = int((math.sin(t) + 1) * width / 2)
+            y = int((math.cos(t) + 1) * height / 2)
+            
+            # Draw moving circle
+            circle_radius = 30
+            draw.ellipse([x-circle_radius, y-circle_radius, x+circle_radius, y+circle_radius], 
+                        fill='lime', outline='white', width=2)
+            
+            # Draw timestamp
+            timestamp = time.strftime('%H:%M:%S')
+            draw.text((10, 10), f"Test Frame - {timestamp}", fill='white')
+            draw.text((10, 40), f"Frame: {self.frame_count}", fill='white')
+            
+            # Draw grid pattern
+            for i in range(0, width, 50):
+                draw.line([(i, 0), (i, height)], fill='gray', width=1)
+            for i in range(0, height, 50):
+                draw.line([(0, i), (width, i)], fill='gray', width=1)
+            
+            # Convert to JPEG bytes
+            buffer = io.BytesIO()
+            image.save(buffer, format='JPEG', quality=70, optimize=True)
+            self.frame_count += 1
+            return buffer.getvalue()
+            
+        except Exception as e:
+            logger.error(f"Test frame generation failed: {e}")
+            # Return minimal fallback frame
+            return self.create_minimal_frame()
+    
+    def create_minimal_frame(self) -> bytes:
+        """Create minimal fallback frame"""
+        try:
+            image = Image.new('RGB', (320, 240), color='red')
+            draw = ImageDraw.Draw(image)
+            draw.text((10, 10), "Camera Error", fill='white')
+            buffer = io.BytesIO()
+            image.save(buffer, format='JPEG', quality=50)
+            return buffer.getvalue()
+        except Exception:
+            return b''
+    
+    def start_streaming(self):
+        """Start the video streaming"""
+        if not self.initialize_camera():
+            logger.error("Failed to initialize camera")
+            return False
         
-        self.running = True
-        self.capture_thread = threading.Thread(target=self.capture_and_process, daemon=True)
-        self.capture_thread.start()
+        self.is_streaming = True
+        logger.info("Lightweight camera streaming started")
         return True
     
-    def stop(self):
-        """Stop the tracker"""
-        self.running = False
-        print("🛑 Tracker stopped")
+    def stop_streaming(self):
+        """Stop the video streaming"""
+        self.is_streaming = False
+        logger.info("Camera streaming stopped")
 
-# Flask app
-app = Flask(__name__)
-tracker = PurePythonGreenTracker()
+# Global camera streamer instance
+camera_streamer = LightweightCameraStreamer()
 
-# Simple HTML template with single camera feed
-HTML_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>📹 Simple Camera Stream</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { 
-            margin: 0;
-            padding: 20px;
-            background: #222;
-            color: white;
-            font-family: Arial, sans-serif;
-            text-align: center;
-        }
-        h1 { 
-            margin-bottom: 20px;
-        }
-        .video-frame { 
-            max-width: 90%;
-            height: auto;
-            border: 2px solid #555;
-            border-radius: 10px;
-        }
-    </style>
-</head>
-<body>
-    <h1>📹 Camera Stream</h1>
-    <img class="video-frame" src="{{ url_for('video_feed') }}" alt="Camera stream">
-</body>
-</html>
-'''
-
-@app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
-
-@app.route('/video_feed')
-def video_feed():
-    def generate():
-        while True:
-            # Get raw frame without any processing
-            image_data = tracker.capture_with_termux()
-            if not image_data:
-                image_data = tracker.create_test_image()
-            
-            frame_bytes = tracker.rgb_to_jpeg_bytes(image_data)
-            if frame_bytes:
+def generate_frames() -> Generator[bytes, None, None]:
+    """Generator function for video frames"""
+    while camera_streamer.is_streaming:
+        try:
+            frame_data = camera_streamer.get_frame()
+            if frame_data:
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/bmp\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.1)
-    
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
+            else:
+                # If no frame available, wait a bit
+                time.sleep(0.2)
+        except Exception as e:
+            logger.error(f"Frame generation error: {e}")
+            time.sleep(0.2)
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize camera on startup"""
+    logger.info("Starting Lightweight Android Camera Stream Server...")
+    camera_streamer.start_streaming()
 
-def main():
-    print("📹 Simple Camera Stream")
-    print("=" * 30)
-    print("📦 Dependencies: Flask only!")
-    print("🎯 Single camera feed")
-    print("=" * 30)
-    
-    if not tracker.start():
-        print("❌ Failed to start tracker")
-        return
-    
-    print("✅ Camera initialized!")
-    print("🌐 Web server starting...")
-    print("📱 Access at: http://localhost:5000")
-    print("⏹️  Press Ctrl+C to stop")
-    
-    try:
-        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
-    except KeyboardInterrupt:
-        print("\n🛑 Shutting down gracefully...")
-    finally:
-        tracker.stop()
-        print("✅ Camera stopped! 👋")
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("Shutting down camera stream...")
+    camera_streamer.stop_streaming()
 
-if __name__ == '__main__':
-    main()
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    """Serve the main page with video stream"""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Lightweight Camera Stream</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                color: white;
+                text-align: center;
+            }
+            .container {
+                max-width: 800px;
+                margin: 0 auto;
+                background: rgba(255, 255, 255, 0.1);
+                border-radius: 15px;
+                padding: 30px;
+                backdrop-filter: blur(10px);
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            }
+            h1 {
+                margin-bottom: 30px;
+                font-size: 2.2em;
+                text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+            }
+            .video-container {
+                position: relative;
+                display: inline-block;
+                border-radius: 10px;
+                overflow: hidden;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+                margin: 20px 0;
+            }
+            img {
+                max-width: 100%;
+                height: auto;
+                display: block;
+            }
+            .controls {
+                margin-top: 20px;
+            }
+            .btn {
+                background: rgba(255, 255, 255, 0.2);
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                color: white;
+                padding: 10px 20px;
+                margin: 5px;
+                border-radius: 20px;
+                cursor: pointer;
+                font-size: 14px;
+                transition: all 0.3s ease;
+            }
+            .btn:hover {
+                background: rgba(255, 255, 255, 0.3);
+                transform: translateY(-2px);
+            }
+            .status {
+                margin-top: 20px;
+                padding: 15px;
+                background: rgba(0, 0, 0, 0.2);
+                border-radius: 10px;
+                font-family: monospace;
+                font-size: 14px;
+            }
+            .info {
+                margin-top: 15px;
+                font-size: 12px;
+                opacity: 0.8;
+            }
+            @media (max-width: 600px) {
+                .container {
+                    padding: 15px;
+                }
+                h1 {
+                    font-size: 1.8em;
+                }
+                .btn {
+                    display: block;
+                    margin: 8px auto;
+                    width: 180px;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>📱 Lightweight Camera Stream</h1>
+            <div class="video-container">
+                <img id="videoStream" src="/video_feed" alt="Camera Stream">
+            </div>
+            <div class="controls">
+                <button class="btn" onclick="refreshStream()">🔄 Refresh</button>
+                <button class="btn" onclick="toggleFullscreen()">🖥️ Fullscreen</button>
+                <button class="btn" onclick="checkStatus()">📊 Status</button>
+            </div>
+            <div class="status" id="status">
+                Status: Streaming active (Lightweight Mode)
+            </div>
+            <div class="info">
+                Optimized for smartphones • Uses minimal resources
+            </div>
+        </div>
+
+        <script>
+            function refreshStream() {
+                const img = document.getElementById('videoStream');
+                img.src = '/video_feed?' + new Date().getTime();
+                updateStatus('Stream refreshed');
+            }
+
+            function toggleFullscreen() {
+                const img = document.getElementById('videoStream');
+                if (img.requestFullscreen) {
+                    img.requestFullscreen();
+                } else if (img.webkitRequestFullscreen) {
+                    img.webkitRequestFullscreen();
+                } else if (img.msRequestFullscreen) {
+                    img.msRequestFullscreen();
+                }
+            }
+
+            async function checkStatus() {
+                try {
+                    const response = await fetch('/status');
+                    const data = await response.json();
+                    updateStatus(`Status: ${data.status} | FPS: ${data.fps} | Mode: ${data.camera_type}`);
+                } catch (error) {
+                    updateStatus('Status: Error fetching status');
+                }
+            }
+
+            function updateStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+
+            // Auto-refresh status every 10 seconds
+            setInterval(checkStatus, 10000);
+
+            // Handle image load errors
+            document.getElementById('videoStream').onerror = function() {
+                updateStatus('Status: Stream connection lost');
+            };
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+@app.get("/video_feed")
+async def video_feed():
+    """Video streaming endpoint"""
+    return StreamingResponse(
+        generate_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+@app.get("/status")
+async def get_status():
+    """Get streaming status"""
+    return {
+        "status": "active" if camera_streamer.is_streaming else "inactive",
+        "fps": camera_streamer.fps,
+        "uptime": int(time.time() - camera_streamer.last_time),
+        "termux_available": camera_streamer.is_termux_available(),
+        "camera_type": "termux" if camera_streamer.is_termux_available() else "test_mode"
+    }
+
+@app.post("/restart")
+async def restart_stream():
+    """Restart the camera stream"""
+    camera_streamer.stop_streaming()
+    await asyncio.sleep(1)
+    success = camera_streamer.start_streaming()
+    return {"success": success, "message": "Stream restarted" if success else "Failed to restart stream"}
+
+if __name__ == "__main__":
+    # Run the server
+    logger.info("Starting Lightweight Android Camera Stream Server on port 5000...")
+    logger.info("Access the stream at: http://localhost:5000")
+    logger.info("Or from your PC at: http://[PHONE_IP]:5000")
+    
+    uvicorn.run(
+        app,
+        host="0.0.0.0",  # Allow connections from any IP
+        port=5000,
+        log_level="info",
+        access_log=False  # Reduce logging overhead
+    )
