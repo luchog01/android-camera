@@ -1,232 +1,238 @@
-#!/usr/bin/env python3
-"""
-Android Camera Stream Server for Termux
-Streams camera feed via Flask web server on port 5000
-"""
-
-import cv2
+from flask import Flask, render_template, Response
+import subprocess
 import threading
 import time
-from flask import Flask, render_template_string, Response
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import os
+import signal
+import sys
 
 app = Flask(__name__)
 
-# Global variables for camera
-camera = None
-camera_lock = threading.Lock()
-frame = None
 
-# HTML template for the web interface
-HTML_TEMPLATE = """
+class CameraStreamer:
+    def __init__(self):
+        self.process = None
+        self.running = False
+
+    def start_camera(self):
+        """Start the camera using termux-camera-photo in a loop"""
+        try:
+            # Test if termux-api is available
+            subprocess.run(["termux-camera-info"], check=True, capture_output=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("Error: termux-api not installed or camera not available")
+            return False
+
+        self.running = True
+        return True
+
+    def capture_frame(self):
+        """Capture a single frame from camera"""
+        try:
+            # Capture photo to temporary file
+            temp_file = "/data/data/com.termux/files/home/temp_photo.jpg"
+            result = subprocess.run(
+                [
+                    "termux-camera-photo",
+                    "-c",
+                    "0",  # Back camera (0 = back, 1 = front)
+                    temp_file,
+                ],
+                capture_output=True,
+                timeout=5,
+            )
+
+            if result.returncode == 0 and os.path.exists(temp_file):
+                with open(temp_file, "rb") as f:
+                    frame_data = f.read()
+                # Clean up temp file
+                os.remove(temp_file)
+                return frame_data
+            return None
+        except Exception as e:
+            print(f"Error capturing frame: {e}")
+            return None
+
+    def generate_frames(self):
+        """Generator function to yield frames for streaming"""
+        while self.running:
+            frame_data = self.capture_frame()
+            if frame_data:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame_data + b"\r\n"
+                )
+            time.sleep(0.5)  # Adjust delay as needed (0.5s = ~2 FPS)
+
+    def stop(self):
+        """Stop the camera streaming"""
+        self.running = False
+
+
+# Global camera streamer instance
+camera = CameraStreamer()
+
+
+@app.route("/")
+def index():
+    """Main page with video stream"""
+    return """
 <!DOCTYPE html>
 <html>
 <head>
     <title>Android Camera Stream</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body {
-            margin: 0;
-            padding: 20px;
-            background-color: #1a1a1a;
-            color: white;
             font-family: Arial, sans-serif;
             text-align: center;
-        }
-        h1 {
-            color: #4CAF50;
-            margin-bottom: 30px;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
         }
         .container {
-            max-width: 100%;
+            max-width: 800px;
             margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
-        #camera-feed {
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        #videoStream {
             max-width: 100%;
             height: auto;
-            border: 3px solid #4CAF50;
+            border: 3px solid #333;
             border-radius: 10px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
         }
-        .info {
+        .controls {
             margin-top: 20px;
-            background-color: #333;
-            padding: 15px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
             border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #0056b3;
         }
         .status {
-            color: #4CAF50;
-            font-weight: bold;
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📱 Android Camera Stream</h1>
-        <div class="info">
-            <p class="status">● LIVE STREAM</p>
-            <p>Camera feed from Termux</p>
+        <img id="videoStream" src="/video_feed" alt="Camera Stream">
+        <div class="controls">
+            <button onclick="refreshStream()">🔄 Refresh Stream</button>
+            <button onclick="toggleFullscreen()">🖼️ Toggle Fullscreen</button>
         </div>
-        <br>
-        <img id="camera-feed" src="{{ url_for('video_feed') }}" alt="Camera feed loading...">
+        <div class="status info">
+            <strong>📡 Status:</strong> Streaming from Android back camera<br>
+            <strong>🌐 URL:</strong> http://your-phone-ip:5000<br>
+            <strong>⚡ Controls:</strong> Use buttons above to refresh or go fullscreen
+        </div>
     </div>
-    
+
     <script>
-        // Add error handling for image loading
-        document.getElementById('camera-feed').onerror = function() {
-            this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQ4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjMzMzIi8+CiAgPHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iI2ZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkNhbWVyYSBub3QgYXZhaWxhYmxlPC90ZXh0Pgo8L3N2Zz4K';
+        function refreshStream() {
+            const img = document.getElementById('videoStream');
+            const timestamp = new Date().getTime();
+            img.src = '/video_feed?' + timestamp;
+        }
+        
+        function toggleFullscreen() {
+            const img = document.getElementById('videoStream');
+            if (img.requestFullscreen) {
+                img.requestFullscreen();
+            } else if (img.webkitRequestFullscreen) {
+                img.webkitRequestFullscreen();
+            } else if (img.mozRequestFullScreen) {
+                img.mozRequestFullScreen();
+            }
+        }
+        
+        // Auto-refresh every 30 seconds to prevent timeouts
+        setInterval(refreshStream, 30000);
+        
+        // Handle connection errors
+        document.getElementById('videoStream').onerror = function() {
+            console.log('Stream error - attempting refresh...');
+            setTimeout(refreshStream, 2000);
         };
     </script>
 </body>
 </html>
-"""
-
-
-def initialize_camera():
-    """Initialize camera with fallback options for Android/Termux"""
-    global camera
-
-    # Try different camera indices and backends for Android
-    camera_indices = [0, 1, 2, -1]  # -1 sometimes works for default camera
-    backends = [cv2.CAP_V4L2, cv2.CAP_ANDROID, cv2.CAP_ANY]
-
-    for backend in backends:
-        for index in camera_indices:
-            try:
-                logger.info(f"Trying camera index {index} with backend {backend}")
-                test_camera = cv2.VideoCapture(index, backend)
-
-                if test_camera.isOpened():
-                    # Test if we can actually read a frame
-                    ret, test_frame = test_camera.read()
-                    if ret and test_frame is not None:
-                        camera = test_camera
-
-                        # Set camera properties for better performance
-                        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                        camera.set(cv2.CAP_PROP_FPS, 30)
-
-                        logger.info(
-                            f"Successfully initialized camera {index} with backend {backend}"
-                        )
-                        return True
-                    else:
-                        test_camera.release()
-                else:
-                    test_camera.release()
-
-            except Exception as e:
-                logger.error(f"Error with camera {index}, backend {backend}: {e}")
-                continue
-
-    logger.error("Failed to initialize any camera")
-    return False
-
-
-def capture_frames():
-    """Continuously capture frames from camera"""
-    global frame, camera
-
-    if not initialize_camera():
-        return
-
-    while True:
-        try:
-            with camera_lock:
-                if camera and camera.isOpened():
-                    ret, new_frame = camera.read()
-                    if ret and new_frame is not None:
-                        # Flip frame horizontally for mirror effect (typical for front-facing camera)
-                        frame = cv2.flip(new_frame, 1)
-                    else:
-                        logger.warning("Failed to read frame from camera")
-                        time.sleep(0.1)
-                else:
-                    logger.error("Camera not available")
-                    time.sleep(1)
-                    if not initialize_camera():
-                        time.sleep(5)  # Wait longer before retrying
-        except Exception as e:
-            logger.error(f"Error capturing frame: {e}")
-            time.sleep(1)
-            # Try to reinitialize camera
-            if camera:
-                camera.release()
-            if not initialize_camera():
-                time.sleep(5)
-
-
-def generate_frames():
-    """Generate frames for streaming"""
-    global frame
-
-    while True:
-        if frame is not None:
-            try:
-                # Encode frame as JPEG
-                ret, buffer = cv2.imencode(
-                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70]
-                )
-                if ret:
-                    frame_bytes = buffer.tobytes()
-                    yield (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
-                    )
-                else:
-                    logger.warning("Failed to encode frame")
-            except Exception as e:
-                logger.error(f"Error generating frame: {e}")
-
-        time.sleep(0.033)  # ~30 FPS
-
-
-@app.route("/")
-def index():
-    """Main page with camera feed"""
-    return render_template_string(HTML_TEMPLATE)
+    """
 
 
 @app.route("/video_feed")
 def video_feed():
     """Video streaming route"""
+    if not camera.running:
+        if not camera.start_camera():
+            return "Camera not available", 500
+
     return Response(
-        generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame"
+        camera.generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame"
     )
 
 
-@app.route("/health")
-def health_check():
-    """Health check endpoint"""
-    camera_status = "OK" if camera and camera.isOpened() else "ERROR"
-    return {"status": "running", "camera": camera_status, "port": 5000}
+@app.route("/stop")
+def stop_stream():
+    """Stop the camera stream"""
+    camera.stop()
+    return "Camera stream stopped"
+
+
+def signal_handler(sig, frame):
+    """Handle Ctrl+C gracefully"""
+    print("\nStopping camera stream...")
+    camera.stop()
+    sys.exit(0)
 
 
 if __name__ == "__main__":
-    logger.info("Starting Android Camera Stream Server...")
+    # Handle Ctrl+C
+    signal.signal(signal.SIGINT, signal_handler)
 
-    # Start camera capture in a separate thread
-    capture_thread = threading.Thread(target=capture_frames, daemon=True)
-    capture_thread.start()
+    print("🚀 Starting Android Camera Streaming Server...")
+    print("📱 Make sure termux-api is installed and camera permissions are granted")
+    print("🌐 Server will be available at: http://localhost:5000")
+    print("🔗 To access from other devices, use your phone's IP address")
+    print("⚠️  Press Ctrl+C to stop the server")
 
-    # Give camera time to initialize
-    time.sleep(2)
-
-    logger.info("Camera stream server starting on http://0.0.0.0:5000")
-    logger.info("Access from any device on your network using your phone's IP address")
-
+    # Get local IP address
     try:
-        # Start Flask server
-        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
-    except KeyboardInterrupt:
-        logger.info("Shutting down server...")
-    finally:
-        # Clean up camera
-        if camera:
-            camera.release()
-        cv2.destroyAllWindows()
+        import socket
+
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        print(f"📍 Your phone's IP: http://{local_ip}:5000")
+    except:
+        print("💡 Find your IP with: ip addr show")
+
+    print("-" * 50)
+
+    app.run(host="0.0.0.0", port=5000, debug=False)
