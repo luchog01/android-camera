@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Lightweight Android Camera Streaming Server using Flask and Pillow
+Lightweight Android Camera Streaming Server using Flask (Pure Python)
 Designed to run on Termux for Android devices with minimal dependencies
 """
 
@@ -10,10 +10,9 @@ import threading
 import time
 import subprocess
 from typing import Generator
-from PIL import Image, ImageDraw
-import io
 import os
 import math
+import struct
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -91,54 +90,85 @@ class LightweightCameraStreamer:
             return self.generate_test_frame()
     
     def generate_test_frame(self) -> bytes:
-        """Generate a test frame using Pillow"""
+        """Generate a test frame using pure Python BMP"""
         try:
             # Create a simple test pattern
-            width, height = 640, 480
-            image = Image.new('RGB', (width, height), color='navy')
-            draw = ImageDraw.Draw(image)
+            width, height = 320, 240  # Smaller for better performance
             
-            # Add some moving elements
-            t = time.time()
-            x = int((math.sin(t) + 1) * width / 2)
-            y = int((math.cos(t) + 1) * height / 2)
-            
-            # Draw moving circle
-            circle_radius = 30
-            draw.ellipse([x-circle_radius, y-circle_radius, x+circle_radius, y+circle_radius], 
-                        fill='lime', outline='white', width=2)
-            
-            # Draw timestamp
-            timestamp = time.strftime('%H:%M:%S')
-            draw.text((10, 10), f"Test Frame - {timestamp}", fill='white')
-            draw.text((10, 40), f"Frame: {self.frame_count}", fill='white')
-            
-            # Draw grid pattern
-            for i in range(0, width, 50):
-                draw.line([(i, 0), (i, height)], fill='gray', width=1)
-            for i in range(0, height, 50):
-                draw.line([(0, i), (width, i)], fill='gray', width=1)
-            
-            # Convert to JPEG bytes
-            buffer = io.BytesIO()
-            image.save(buffer, format='JPEG', quality=70, optimize=True)
-            self.frame_count += 1
-            return buffer.getvalue()
+            # Create BMP image data
+            return self.create_bmp_image(width, height)
             
         except Exception as e:
             logger.error(f"Test frame generation failed: {e}")
             # Return minimal fallback frame
             return self.create_minimal_frame()
     
+    def create_bmp_image(self, width: int, height: int) -> bytes:
+        """Create a BMP image using pure Python"""
+        try:
+            # BMP header
+            file_size = 54 + (width * height * 3)  # Header + pixel data
+            bmp_header = struct.pack('<2sIHHI', b'BM', file_size, 0, 0, 54)
+            
+            # DIB header
+            dib_header = struct.pack('<IIIHHIIIIII', 
+                40,  # DIB header size
+                width, height,  # Image dimensions
+                1,  # Color planes
+                24,  # Bits per pixel
+                0,  # Compression
+                width * height * 3,  # Image size
+                2835, 2835,  # Pixels per meter
+                0, 0  # Colors used/important
+            )
+            
+            # Create animated pattern
+            t = time.time()
+            center_x = int((math.sin(t) + 1) * width / 2)
+            center_y = int((math.cos(t) + 1) * height / 2)
+            
+            # Generate pixel data (BGR format for BMP)
+            pixels = bytearray()
+            for y in range(height - 1, -1, -1):  # BMP is bottom-up
+                for x in range(width):
+                    # Calculate distance from center for circle effect
+                    dx = x - center_x
+                    dy = y - center_y
+                    distance = math.sqrt(dx*dx + dy*dy)
+                    
+                    # Create animated pattern
+                    if distance < 30:  # Moving circle
+                        # Green circle
+                        pixels.extend([0, 255, 0])  # BGR
+                    elif (x + int(t*10)) % 40 < 20 and (y + int(t*10)) % 40 < 20:
+                        # Animated grid pattern
+                        pixels.extend([100, 100, 200])  # Light blue
+                    else:
+                        # Background
+                        pixels.extend([50, 50, 100])  # Dark blue
+            
+            self.frame_count += 1
+            return bmp_header + dib_header + pixels
+            
+        except Exception as e:
+            logger.error(f"BMP creation failed: {e}")
+            return self.create_minimal_frame()
+    
     def create_minimal_frame(self) -> bytes:
         """Create minimal fallback frame"""
         try:
-            image = Image.new('RGB', (320, 240), color='red')
-            draw = ImageDraw.Draw(image)
-            draw.text((10, 10), "Camera Error", fill='white')
-            buffer = io.BytesIO()
-            image.save(buffer, format='JPEG', quality=50)
-            return buffer.getvalue()
+            # Minimal 100x100 red BMP
+            width, height = 100, 100
+            file_size = 54 + (width * height * 3)
+            
+            bmp_header = struct.pack('<2sIHHI', b'BM', file_size, 0, 0, 54)
+            dib_header = struct.pack('<IIIHHIIIIII', 40, width, height, 1, 24, 0, 
+                                   width * height * 3, 2835, 2835, 0, 0)
+            
+            # Red pixels (BGR format)
+            pixels = bytearray([0, 0, 255] * width * height)  # Red in BGR
+            
+            return bmp_header + dib_header + pixels
         except Exception:
             return b''
     
